@@ -111,6 +111,48 @@
   }
   canvas { max-height: 420px; }
 
+  .rain-table-wrap { overflow-x: auto; }
+  table.rain-table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+  }
+  table.rain-table th, table.rain-table td {
+    padding: 0.4rem 0.55rem;
+    text-align: right;
+    border-bottom: 1px solid var(--rule);
+    white-space: nowrap;
+  }
+  table.rain-table th:first-child, table.rain-table td:first-child {
+    text-align: left;
+    position: sticky;
+    left: 0;
+    background: var(--panel);
+  }
+  table.rain-table thead th {
+    color: var(--ink-soft);
+    font-weight: 600;
+    border-bottom: 2px solid var(--rule);
+  }
+  table.rain-table tbody tr:hover td { background: #f3f7f6; }
+  table.rain-table td .pct {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--ink-soft);
+  }
+  table.rain-table td.above .pct { color: var(--rain); }
+  table.rain-table td.below .pct { color: var(--dry); }
+  table.rain-table td.incomplete { color: var(--ink-soft); font-style: italic; }
+  table.rain-table td.year-total { font-weight: 650; border-left: 1px solid var(--rule); }
+  table.rain-table tfoot td { font-weight: 600; border-top: 2px solid var(--rule); border-bottom: none; }
+  table.rain-table tfoot tr:first-child td { border-top: 2px solid var(--rule); }
+  .table-note {
+    color: var(--ink-soft);
+    font-size: 0.8rem;
+    margin: 0.7rem 0 0;
+  }
+
   footer {
     margin-top: 2.5rem;
     color: var(--ink-soft);
@@ -138,12 +180,14 @@
     <button data-view="daily">By day</button>
     <button data-view="monthly">By month</button>
     <button data-view="yearly">By year</button>
+    <button data-view="table">Monthly table</button>
   </nav>
 
   <section class="panel">
     <div class="panel-controls" id="controls"></div>
     <h2 id="panel-title">Rainfall, last 14 days by hour</h2>
     <canvas id="chart"></canvas>
+    <div id="table-container" class="hidden"></div>
   </section>
 
   <footer>
