@@ -2,7 +2,16 @@ const RAIN = "#2b6777";
 const RAIN_SOFT = "#a9c8ce";
 
 let chart;
-let data = { summary: null, daily: [], monthly: [], yearly: [], recent_hourly: [] };
+let data = { summary: null, daily: [], monthly: [], yearly: [], recent_hourly: [], climatology: [] };
+
+function showChart() {
+  document.getElementById("chart").classList.remove("hidden");
+  document.getElementById("table-container").classList.add("hidden");
+}
+function showTable() {
+  document.getElementById("chart").classList.add("hidden");
+  document.getElementById("table-container").classList.remove("hidden");
+}
 
 async function loadJSON(name) {
   const res = await fetch(`data/${name}.json?_=${Date.now()}`);
@@ -36,7 +45,8 @@ function renderHero() {
     : "–";
 }
 
-function drawBarChart(labels, values, label) {
+function drawBarChart(labels, values, label, barColors) {
+  showChart();
   const ctx = document.getElementById("chart").getContext("2d");
   if (chart) chart.destroy();
   chart = new Chart(ctx, {
@@ -47,7 +57,7 @@ function drawBarChart(labels, values, label) {
         {
           label,
           data: values,
-          backgroundColor: RAIN,
+          backgroundColor: barColors || RAIN,
           borderRadius: 3,
           maxBarThickness: 26,
         },
@@ -124,10 +134,14 @@ function viewMonthly() {
         });
       drawBarChart(labels, values.map((v) => Math.round(v * 10) / 10), "avg mm per month");
     } else {
-      document.getElementById("panel-title").textContent = `Monthly rainfall — ${y}`;
+      document.getElementById("panel-title").textContent = `Monthly rainfall — ${y} (colour shows above/below the long-term average for that month)`;
       const rows = data.monthly.filter((m) => m.month.startsWith(y));
       const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-      drawBarChart(rows.map((r) => monthNames[parseInt(r.month.slice(5, 7), 10) - 1]), rows.map((r) => r.total_mm), "mm per month");
+      const colors = rows.map((r) => {
+        if (!r.complete || r.pct_of_avg == null) return RAIN_SOFT;
+        return r.pct_of_avg >= 100 ? RAIN : "#c98a3d";
+      });
+      drawBarChart(rows.map((r) => monthNames[parseInt(r.month.slice(5, 7), 10) - 1]), rows.map((r) => r.total_mm), "mm per month", colors);
     }
   }
   select.addEventListener("change", render);
@@ -140,7 +154,86 @@ function viewYearly() {
   drawBarChart(data.yearly.map((y) => y.year), data.yearly.map((y) => y.total_mm), "mm per year");
 }
 
-const VIEWS = { recent: viewRecent, daily: viewDaily, monthly: viewMonthly, yearly: viewYearly };
+const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function cellHTML(entry) {
+  if (!entry) return "<td>–</td>";
+  const { total_mm, complete, pct_of_avg } = entry;
+  const classes = [];
+  if (!complete) classes.push("incomplete");
+  else if (pct_of_avg != null) classes.push(pct_of_avg >= 100 ? "above" : "below");
+  const pctLine = pct_of_avg != null ? `<span class="pct">${pct_of_avg}%</span>` : (!complete ? `<span class="pct">gap</span>` : "");
+  return `<td class="${classes.join(" ")}">${total_mm.toFixed(1)}${pctLine}</td>`;
+}
+
+function viewTable() {
+  document.getElementById("panel-title").textContent = "Monthly rainfall table";
+  document.getElementById("controls").innerHTML = "";
+  showTable();
+
+  // Index monthly entries as {year: {monthNum: entry}}
+  const byYear = {};
+  data.monthly.forEach((m) => {
+    const y = m.month.slice(0, 4);
+    const mo = m.month.slice(5, 7);
+    byYear[y] = byYear[y] || {};
+    byYear[y][mo] = m;
+  });
+  const years = Object.keys(byYear).sort().reverse();
+
+  const climByMonth = {};
+  data.climatology.forEach((c) => (climByMonth[c.month_num] = c));
+
+  let head = `<tr><th>Year</th>${MONTH_ABBR.map((m) => `<th>${m}</th>`).join("")}<th class="year-total">Year</th></tr>`;
+
+  let bodyRows = years
+    .map((y) => {
+      const cells = [];
+      let yearTotal = 0;
+      let yearComplete = true;
+      for (let i = 1; i <= 12; i++) {
+        const mo = String(i).padStart(2, "0");
+        const entry = byYear[y][mo];
+        cells.push(cellHTML(entry));
+        if (entry) yearTotal += entry.total_mm;
+        if (!entry || !entry.complete) yearComplete = false;
+      }
+      const yearEntry = data.yearly.find((yy) => String(yy.year) === y);
+      const pctLine = yearEntry && yearEntry.pct_of_avg != null ? `<span class="pct">${yearEntry.pct_of_avg}%</span>` : "";
+      return `<tr><td>${y}</td>${cells.join("")}<td class="year-total">${yearTotal.toFixed(1)}${pctLine}</td></tr>`;
+    })
+    .join("");
+
+  // Footer: lowest / highest / mean per month, using only complete months
+  function footerRow(label, fn) {
+    const cells = [];
+    for (let i = 1; i <= 12; i++) {
+      const mo = String(i).padStart(2, "0");
+      const vals = data.monthly.filter((m) => m.month.slice(5, 7) === mo && m.complete).map((m) => m.total_mm);
+      cells.push(`<td>${vals.length ? fn(vals).toFixed(1) : "–"}</td>`);
+    }
+    const yearVals = data.yearly.filter((y) => y.complete).map((y) => y.total_mm);
+    const yearCell = `<td class="year-total">${yearVals.length ? fn(yearVals).toFixed(1) : "–"}</td>`;
+    return `<tr><td>${label}</td>${cells.join("")}${yearCell}</tr>`;
+  }
+  const mean = (arr) => arr.reduce((a, b) => a + b, 0) / arr.length;
+  let foot = footerRow("Lowest", (a) => Math.min(...a));
+  foot += footerRow("Highest", (a) => Math.max(...a));
+  foot += footerRow("Mean", mean);
+
+  document.getElementById("table-container").innerHTML = `
+    <div class="rain-table-wrap">
+      <table class="rain-table">
+        <thead>${head}</thead>
+        <tbody>${bodyRows}</tbody>
+        <tfoot>${foot}</tfoot>
+      </table>
+    </div>
+    <p class="table-note">Percentages are against the average for that calendar month, calculated only from years with a complete data record for that month (so gaps in the gauge's history — such as 2007–2009 — don't skew the average low). Months shown in <em>italics</em> have a substantial gap in that period's readings and are excluded from the average and from the Lowest/Highest/Mean rows.</p>
+  `;
+}
+
+const VIEWS = { recent: viewRecent, daily: viewDaily, monthly: viewMonthly, yearly: viewYearly, table: viewTable };
 
 function setActiveTab(view) {
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.view === view));
@@ -148,14 +241,15 @@ function setActiveTab(view) {
 }
 
 async function init() {
-  const [summary, daily, monthly, yearly, recent_hourly] = await Promise.all([
+  const [summary, daily, monthly, yearly, recent_hourly, climatology] = await Promise.all([
     loadJSON("summary"),
     loadJSON("daily"),
     loadJSON("monthly"),
     loadJSON("yearly"),
     loadJSON("recent_hourly"),
+    loadJSON("climatology"),
   ]);
-  data = { summary, daily, monthly, yearly, recent_hourly };
+  data = { summary, daily, monthly, yearly, recent_hourly, climatology };
   renderHero();
   setActiveTab("recent");
 
