@@ -9,6 +9,7 @@ Safe to run over and over: on the very first run it pulls the full history
 newer than what's already stored, so it stays fast and cheap.
 """
 
+import calendar
 import csv
 import io
 import json
@@ -17,6 +18,12 @@ import sys
 import urllib.request
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+
+# A month needs at least this fraction of its expected 15-minute readings
+# present to be treated as "complete" for averaging purposes. Months below
+# this (e.g. the 2007-2009 gap on this gauge) are shown in the data but
+# excluded from average/record calculations so they don't bias them low.
+COMPLETENESS_THRESHOLD = 0.90
 
 MEASURE_ID = "ad5df79a-edad-4a84-bc68-515bca680038-rainfall-t-900-mm-qualified"
 BASE_URL = f"https://environment.data.gov.uk/hydrology/id/measures/{MEASURE_ID}/readings.csv"
@@ -80,46 +87,135 @@ def get_last_timestamp(conn):
     return row[0] if row and row[0] else None
 
 
+def month_range(start_month, end_month):
+    """Yield 'YYYY-MM' strings from start_month to end_month inclusive."""
+    y, m = int(start_month[:4]), int(start_month[5:7])
+    ey, em = int(end_month[:4]), int(end_month[5:7])
+    while (y, m) <= (ey, em):
+        yield f"{y:04d}-{m:02d}"
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+
+
 def build_aggregates(conn):
     """Compute daily / monthly / yearly totals and write JSON files for the site."""
+    # Reading counts (non-null values) per day and per month, used both for
+    # totals and for judging how complete each month's record is.
     cur = conn.execute(
         "SELECT timestamp, value_mm FROM readings WHERE value_mm IS NOT NULL ORDER BY timestamp"
     )
 
     daily = defaultdict(float)
+    daily_counts = defaultdict(int)
     hourly_recent = defaultdict(float)
     cutoff_recent = (datetime.utcnow() - timedelta(days=14)).strftime("%Y-%m-%dT%H:%M:%S")
 
+    first_ts, last_ts = None, None
     for ts, value in cur:
+        if first_ts is None:
+            first_ts = ts
+        last_ts = ts
         day = ts[:10]
         daily[day] += value
+        daily_counts[day] += 1
         if ts >= cutoff_recent:
             hour_key = ts[:13] + ":00:00"
             hourly_recent[hour_key] += value
 
-    monthly = defaultdict(float)
-    yearly = defaultdict(float)
+    if first_ts is None:
+        print("No readings in database yet — skipping aggregate build.")
+        return
+
+    today = date.today()
+    this_month = today.isoformat()[:7]
+    this_year = str(today.year)
+
+    # Build every month in range so wholly-missing months show up as 0%
+    # coverage rather than silently vanishing from the table.
+    all_months = list(month_range(first_ts[:7], last_ts[:7]))
+
+    monthly_total = defaultdict(float)
+    monthly_reading_count = defaultdict(int)
     for day, total in daily.items():
-        y, m = day[:4], day[5:7]
-        monthly[f"{y}-{m}"] += total
-        yearly[y] += total
+        monthly_total[day[:7]] += total
+        monthly_reading_count[day[:7]] += daily_counts[day]
+
+    monthly_complete = {}
+    monthly_coverage = {}
+    for m in all_months:
+        y, mo = int(m[:4]), int(m[5:7])
+        expected = calendar.monthrange(y, mo)[1] * 96  # 96 readings/day at 15-min resolution
+        actual = monthly_reading_count.get(m, 0)
+        coverage = actual / expected if expected else 0
+        monthly_coverage[m] = round(coverage * 100, 1)
+        # The current, still-in-progress month is real but naturally "incomplete" —
+        # track that separately rather than flagging it as a data gap.
+        monthly_complete[m] = coverage >= COMPLETENESS_THRESHOLD
+
+    # Climatology: average total for each calendar month (Jan..Dec), built only
+    # from complete months in past years, so gaps like 2007-2009 don't drag it down.
+    climatology_samples = defaultdict(list)
+    for m in all_months:
+        if m[:4] == this_year:
+            continue  # exclude the current, still-running year
+        if monthly_complete[m]:
+            climatology_samples[m[5:7]].append(monthly_total.get(m, 0.0))
+
+    climatology = {}
+    for mo in [f"{i:02d}" for i in range(1, 13)]:
+        samples = climatology_samples.get(mo, [])
+        climatology[mo] = {
+            "avg_mm": round(sum(samples) / len(samples), 2) if samples else None,
+            "years_used": len(samples),
+        }
+
+    monthly_list = []
+    for m in sorted(all_months):
+        total = round(monthly_total.get(m, 0.0), 2)
+        avg = climatology[m[5:7]]["avg_mm"]
+        pct = round(total / avg * 100) if avg else None
+        monthly_list.append(
+            {
+                "month": m,
+                "total_mm": total,
+                "complete": monthly_complete[m],
+                "coverage_pct": monthly_coverage[m],
+                "pct_of_avg": pct,
+            }
+        )
+
+    yearly_total = defaultdict(float)
+    yearly_all_complete = defaultdict(lambda: True)
+    for m in all_months:
+        y = m[:4]
+        yearly_total[y] += monthly_total.get(m, 0.0)
+        if not monthly_complete[m]:
+            yearly_all_complete[y] = False
+
+    avg_year_mm = sum(c["avg_mm"] for c in climatology.values() if c["avg_mm"] is not None)
+    avg_year_mm = round(avg_year_mm, 2) if avg_year_mm else None
+
+    yearly_list = []
+    for y in sorted(yearly_total.keys()):
+        total = round(yearly_total[y], 2)
+        pct = round(total / avg_year_mm * 100) if avg_year_mm and yearly_all_complete[y] else None
+        yearly_list.append(
+            {
+                "year": int(y),
+                "total_mm": total,
+                "complete": yearly_all_complete[y],
+                "pct_of_avg": pct,
+            }
+        )
 
     daily_list = [{"date": d, "total_mm": round(v, 2)} for d, v in sorted(daily.items())]
-    monthly_list = [{"month": m, "total_mm": round(v, 2)} for m, v in sorted(monthly.items())]
-    yearly_list = [{"year": int(y), "total_mm": round(v, 2)} for y, v in sorted(yearly.items())]
     hourly_list = [{"hour": h, "total_mm": round(v, 2)} for h, v in sorted(hourly_recent.items())]
+    climatology_list = [{"month_num": mo, **c} for mo, c in sorted(climatology.items())]
 
-    today = date.today().isoformat()
-    this_month = today[:7]
-    this_year = today[:4]
-
-    # Average total for "this month" (e.g. all Septembers) across prior years, excluding current year
-    month_num = today[5:7]
-    same_month_totals = [v for m, v in monthly.items() if m[5:7] == month_num and m[:4] != this_year]
-    avg_this_month = round(sum(same_month_totals) / len(same_month_totals), 2) if same_month_totals else None
-
-    prior_years = [v for y, v in yearly.items() if y != this_year]
-    avg_year = round(sum(prior_years) / len(prior_years), 2) if prior_years else None
+    this_month_avg = climatology[this_month[5:7]]["avg_mm"]
+    this_month_total = round(monthly_total.get(this_month, 0.0), 2)
 
     last_24h_cutoff = (datetime.utcnow() - timedelta(hours=24)).strftime("%Y-%m-%dT%H:%M:%S")
     cur2 = conn.execute(
@@ -131,11 +227,11 @@ def build_aggregates(conn):
     summary = {
         "last_updated_utc": datetime.utcnow().isoformat(timespec="seconds") + "Z",
         "last_24h_mm": last_24h,
-        "this_month_mm": round(monthly.get(this_month, 0), 2),
-        "this_month_avg_mm": avg_this_month,
-        "this_year_mm": round(yearly.get(this_year, 0), 2),
-        "avg_year_mm": avg_year,
-        "record_years": len(yearly),
+        "this_month_mm": this_month_total,
+        "this_month_avg_mm": this_month_avg,
+        "this_year_mm": round(yearly_total.get(this_year, 0.0), 2),
+        "avg_year_mm": avg_year_mm,
+        "record_years": len({y for y in yearly_total if yearly_all_complete[y]}),
     }
 
     import os
@@ -147,12 +243,14 @@ def build_aggregates(conn):
         json.dump(monthly_list, f)
     with open(f"{OUT_DIR}/yearly.json", "w") as f:
         json.dump(yearly_list, f)
+    with open(f"{OUT_DIR}/climatology.json", "w") as f:
+        json.dump(climatology_list, f)
     with open(f"{OUT_DIR}/recent_hourly.json", "w") as f:
         json.dump(hourly_list, f)
     with open(f"{OUT_DIR}/summary.json", "w") as f:
         json.dump(summary, f)
 
-    print("Wrote JSON files:", ", ".join(["daily", "monthly", "yearly", "recent_hourly", "summary"]))
+    print("Wrote JSON files:", ", ".join(["daily", "monthly", "yearly", "climatology", "recent_hourly", "summary"]))
 
 
 def main():
