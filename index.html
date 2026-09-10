@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Norwood Reservoir Rainfall</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #eef2f1;
+    --panel: #ffffff;
+    --ink: #17262b;
+    --ink-soft: #4c6066;
+    --rule: #cdd9d8;
+    --rain: #2b6777;
+    --rain-soft: #a9c8ce;
+    --dry: #c98a3d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.45;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+
+  header h1 {
+    font-size: 1.6rem;
+    font-weight: 650;
+    margin: 0 0 0.15rem;
+    letter-spacing: -0.01em;
+  }
+  header p.sub {
+    margin: 0 0 2rem;
+    color: var(--ink-soft);
+    font-size: 0.95rem;
+    max-width: 60ch;
+  }
+
+  .hero {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 2rem;
+  }
+  .hero .stat {
+    background: var(--panel);
+    padding: 1.1rem 1.2rem;
+  }
+  .hero .stat .num {
+    font-size: 1.9rem;
+    font-weight: 650;
+    color: var(--rain);
+    font-variant-numeric: tabular-nums;
+  }
+  .hero .stat .label {
+    color: var(--ink-soft);
+    font-size: 0.82rem;
+    margin-top: 0.15rem;
+  }
+
+  nav.tabs {
+    display: flex;
+    gap: 0.4rem;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+  nav.tabs button {
+    border: 1px solid var(--rule);
+    background: var(--panel);
+    color: var(--ink-soft);
+    padding: 0.45rem 0.95rem;
+    border-radius: 999px;
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+  nav.tabs button.active {
+    background: var(--rain);
+    border-color: var(--rain);
+    color: white;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 1.4rem;
+  }
+  .panel h2 { margin: 0 0 1rem; font-size: 1.05rem; font-weight: 600; }
+  .panel-controls {
+    display: flex;
+    gap: 0.6rem;
+    align-items: center;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+  }
+  .panel-controls select {
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 0.35rem 0.6rem;
+    font-size: 0.9rem;
+    background: var(--bg);
+    color: var(--ink);
+  }
+  canvas { max-height: 420px; }
+
+  footer {
+    margin-top: 2.5rem;
+    color: var(--ink-soft);
+    font-size: 0.82rem;
+  }
+  footer a { color: var(--rain); }
+
+  .hidden { display: none; }
+  @media (max-width: 640px) {
+    .hero { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Norwood Reservoir rainfall</h1>
+    <p class="sub">Fifteen-minute rainfall readings from the Environment Agency's Norwood Reservoir gauge (station 288092TP), going back to 2003.</p>
+  </header>
+
+  <div class="hero" id="hero"></div>
+
+  <nav class="tabs" id="tabs">
+    <button data-view="recent" class="active">Recent hours</button>
+    <button data-view="daily">By day</button>
+    <button data-view="monthly">By month</button>
+    <button data-view="yearly">By year</button>
+  </nav>
+
+  <section class="panel">
+    <div class="panel-controls" id="controls"></div>
+    <h2 id="panel-title">Rainfall, last 14 days by hour</h2>
+    <canvas id="chart"></canvas>
+  </section>
+
+  <footer>
+    Data: Environment Agency real-time and hydrology APIs, under the
+    <a href="https://www.nationalarchives.gov.uk/doc/open-government-licence/version/3/" target="_blank" rel="noopener">Open Government Licence</a>.
+    Last updated: <span id="last-updated">–</span>.
+  </footer>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
